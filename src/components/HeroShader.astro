@@ -1,0 +1,93 @@
+---
+---
+<section class="hero" id="hero">
+  <canvas id="hero-canvas"></canvas>
+  <div class="hero-content">
+    <p class="hero-greeting">Hello, I'm</p>
+    <h1 class="hero-title">René</h1>
+    <p class="hero-subtitle">Full-Stack Developer</p>
+    <p class="hero-description">I craft modern web applications with clean code and exceptional user experiences.</p>
+    <div class="hero-cta">
+      <a href="#projects" class="btn btn-primary">View My Work</a>
+      <a href="#contact" class="btn btn-secondary">Get In Touch</a>
+    </div>
+  </div>
+</section>
+<style>
+.hero { position: relative; min-height: 100vh; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+#hero-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
+.hero-content { position: relative; z-index: 1; text-align: center; max-width: 800px; padding: 0 var(--spacing-lg); }
+.hero-greeting { font-family: var(--font-mono); font-size: 1rem; color: var(--color-accent); margin-bottom: var(--spacing-sm); }
+.hero-title { font-size: clamp(4rem, 12vw, 8rem); font-weight: 700; letter-spacing: -0.04em; line-height: 1; margin-bottom: var(--spacing-md); background: linear-gradient(135deg, #fff 0%, #a1a1aa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.hero-subtitle { font-size: clamp(1.25rem, 3vw, 1.75rem); color: var(--color-text-secondary); margin-bottom: var(--spacing-lg); }
+.hero-description { font-size: 1.125rem; color: var(--color-text-tertiary); max-width: 500px; margin: 0 auto var(--spacing-xl); }
+.hero-cta { display: flex; gap: var(--spacing-md); justify-content: center; flex-wrap: wrap; }
+@media (max-width: 480px) { .hero-cta { flex-direction: column; width: 100%; } .hero-cta .btn { width: 100%; } }
+</style>
+<script>
+import * as THREE from 'three';
+const vertexShader = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const fragmentShader = `
+uniform float uTime; uniform vec2 uMouse; varying vec2 vUv;
+vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
+float snoise(vec2 v) {
+  const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+  vec2 i = floor(v + dot(v, C.yy)); vec2 x0 = v - i + dot(i, C.xx);
+  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+  vec4 x12 = x0.xyxy + C.xxzz; x12.xy -= i1; i = mod289(i);
+  vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+  vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
+  m = m*m; m = m*m;
+  vec3 x = 2.0 * fract(p * C.www) - 1.0; vec3 h = abs(x) - 0.5;
+  vec3 ox = floor(x + 0.5); vec3 a0 = x - ox;
+  m *= 1.79284291400159 - 0.85373472095314 * (a0*a0 + h*h);
+  vec3 g; g.x = a0.x * x0.x + h.x * x0.y; g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+  return 130.0 * dot(m, g);
+}
+void main() {
+  vec2 uv = vUv; float dist = distance(uv, uMouse);
+  float n1 = snoise(uv * 3.0 + uTime * 0.1);
+  float n2 = snoise(uv * 5.0 - uTime * 0.15 + 10.0);
+  float n3 = snoise(uv * 2.0 + uTime * 0.08 + uMouse * 2.0);
+  float cn = (n1 + n2 * 0.5 + n3 * 0.3) / 1.8;
+  vec3 c1 = vec3(0.039, 0.039, 0.043); vec3 c2 = vec3(0.09, 0.09, 0.15);
+  vec3 c3 = vec3(0.388, 0.4, 0.945); vec3 c4 = vec3(0.506, 0.549, 0.972);
+  float mg = smoothstep(0.5, 0.0, dist) * 0.4;
+  float mf1 = smoothstep(-0.5, 0.5, cn); float mf2 = smoothstep(0.0, 1.0, uv.y + n1 * 0.2);
+  vec3 bc = mix(c1, c2, mf2); vec3 ac = mix(c3, c4, n2 * 0.5 + 0.5);
+  float am = smoothstep(0.3, 0.7, cn) * 0.3 + mg;
+  vec3 fc = mix(bc, ac, am);
+  float vig = 1.0 - smoothstep(0.5, 1.5, length(uv - 0.5) * 1.5);
+  fc *= vig * 0.3 + 0.7;
+  gl_FragColor = vec4(fc, 1.0);
+}`;
+function init() {
+  const canvas = document.getElementById('hero-canvas') as HTMLCanvasElement;
+  if (!canvas) return;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+  camera.position.z = 1;
+  const uniforms = { uTime: { value: 0 }, uMouse: { value: new THREE.Vector2(0.5, 0.5) } };
+  const material = new THREE.ShaderMaterial({ vertexShader, fragmentShader, uniforms });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+  scene.add(mesh);
+  const target = new THREE.Vector2(0.5, 0.5), current = new THREE.Vector2(0.5, 0.5);
+  document.addEventListener('mousemove', (e) => { target.x = e.clientX / window.innerWidth; target.y = 1.0 - (e.clientY / window.innerHeight); });
+  window.addEventListener('resize', () => { renderer.setSize(window.innerWidth, window.innerHeight); });
+  function animate() {
+    requestAnimationFrame(animate);
+    uniforms.uTime.value += 0.01;
+    current.x += (target.x - current.x) * 0.05;
+    current.y += (target.y - current.y) * 0.05;
+    uniforms.uMouse.value.copy(current);
+    renderer.render(scene, camera);
+  }
+  animate();
+}
+document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', init) : init();
+</script>

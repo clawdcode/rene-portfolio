@@ -1,0 +1,35 @@
+---
+---
+<nav class="nav">
+  <div class="nav-container">
+    <a href="#" class="logo">R<span class="accent">.</span></a>
+    <ul class="nav-links">
+      <li><a href="#about">About</a></li>
+      <li><a href="#skills">Skills</a></li>
+      <li><a href="#projects">Projects</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ul>
+    <button class="nav-toggle" aria-label="Toggle menu" id="nav-toggle"><span></span><span></span><span></span></button>
+  </div>
+</nav>
+<style>
+.nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: rgba(10, 10, 11, 0.8); backdrop-filter: blur(12px); border-bottom: 1px solid var(--color-border); }
+.nav-container { display: flex; align-items: center; justify-content: space-between; max-width: 1200px; margin: 0 auto; padding: var(--spacing-md) var(--spacing-lg); }
+.logo { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.05em; }
+.nav-links { display: flex; gap: var(--spacing-xl); list-style: none; }
+.nav-links a { font-size: 0.875rem; font-weight: 500; color: var(--color-text-secondary); }
+.nav-links a:hover { color: var(--color-text); }
+.nav-toggle { display: none; flex-direction: column; gap: 5px; background: none; border: none; cursor: pointer; padding: 5px; }
+.nav-toggle span { display: block; width: 24px; height: 2px; background: var(--color-text); }
+@media (max-width: 768px) {
+  .nav-links { display: none; position: absolute; top: 100%; left: 0; right: 0; flex-direction: column; background: var(--color-bg); border-bottom: 1px solid var(--color-border); padding: var(--spacing-lg); gap: var(--spacing-md); }
+  .nav-links.active { display: flex; }
+  .nav-toggle { display: flex; }
+}
+</style>
+<script>
+const toggle = document.getElementById('nav-toggle');
+const links = document.querySelector('.nav-links');
+toggle?.addEventListener('click', () => links?.classList.toggle('active'));
+links?.querySelectorAll('a').forEach(l => l.addEventListener('click', () => links.classList.remove('active')));
+</script>

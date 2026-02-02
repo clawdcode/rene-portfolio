@@ -1,0 +1,36 @@
+---
+---
+<section id="projects" class="section projects">
+  <div class="container">
+    <h2 class="section-title">Featured Projects</h2>
+    <div class="projects-grid">
+      <article class="project-card">
+        <div class="project-image"><div class="project-placeholder">🌍</div></div>
+        <div class="project-content"><h3>Gather Now</h3><p>A directory platform connecting people with Christian small groups in Germany.</p><div class="project-tags"><span>Next.js</span><span>React</span><span>TypeScript</span></div></div>
+      </article>
+      <article class="project-card">
+        <div class="project-image"><div class="project-placeholder">🏢</div></div>
+        <div class="project-content"><h3>Enterprise Solutions</h3><p>Full-stack applications for enterprise clients, focusing on scalability and security.</p><div class="project-tags"><span>React</span><span>Node.js</span><span>AWS</span></div></div>
+      </article>
+      <article class="project-card">
+        <div class="project-image"><div class="project-placeholder">🤖</div></div>
+        <div class="project-content"><h3>AI-Powered Tools</h3><p>Exploring agentic AI to automate development workflows.</p><div class="project-tags"><span>AI/LLM</span><span>Automation</span><span>TypeScript</span></div></div>
+      </article>
+    </div>
+  </div>
+</section>
+<style>
+.projects { background: var(--color-bg-secondary); }
+.projects-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-xl); }
+.project-card { background: var(--color-bg); border-radius: var(--radius-xl); overflow: hidden; border: 1px solid var(--color-border); transition: all var(--transition-normal); }
+.project-card:hover { transform: translateY(-8px); border-color: var(--color-accent); box-shadow: 0 20px 40px -20px rgba(0,0,0,0.5); }
+.project-image { aspect-ratio: 16/10; background: var(--color-bg-tertiary); display: flex; align-items: center; justify-content: center; }
+.project-placeholder { font-size: 3rem; }
+.project-content { padding: var(--spacing-xl); }
+.project-content h3 { margin-bottom: var(--spacing-sm); }
+.project-content p { color: var(--color-text-secondary); font-size: 0.9375rem; margin-bottom: var(--spacing-lg); }
+.project-tags { display: flex; flex-wrap: wrap; gap: var(--spacing-sm); }
+.project-tags span { padding: var(--spacing-xs) var(--spacing-md); background: var(--color-bg-tertiary); border-radius: var(--radius-sm); font-size: 0.75rem; color: var(--color-text-secondary); font-family: var(--font-mono); }
+@media (max-width: 1024px) { .projects-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) { .projects-grid { grid-template-columns: 1fr; } }
+</style>
