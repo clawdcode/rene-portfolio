@@ -1,0 +1,344 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="Shader Prototype | René Portfolio">
+  <main class="shader-page">
+    <canvas id="shader-canvas"></canvas>
+    <div class="overlay">
+      <h1>Shader Prototype</h1>
+      <p>Move your mouse to reveal the heat beneath</p>
+      <a href="/" class="back-link">← Back to Portfolio</a>
+    </div>
+  </main>
+</Layout>
+
+<style>
+  .shader-page {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #0a0a0b;
+  }
+  
+  #shader-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+  }
+  
+  .overlay {
+    position: absolute;
+    bottom: 40px;
+    left: 40px;
+    z-index: 10;
+    pointer-events: none;
+  }
+  
+  .overlay h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 0.5rem;
+    text-shadow: 0 2px 20px rgba(0, 0, 0, 0.8);
+  }
+  
+  .overlay p {
+    font-size: 0.875rem;
+    color: rgba(255, 255, 255, 0.5);
+    margin-bottom: 1rem;
+  }
+  
+  .overlay .back-link {
+    pointer-events: auto;
+    font-size: 0.875rem;
+    color: rgba(255, 150, 100, 0.8);
+    transition: color 0.2s ease;
+  }
+  
+  .overlay .back-link:hover {
+    color: rgba(255, 180, 120, 1);
+  }
+</style>
+
+<script>
+import * as THREE from 'three';
+
+const vertexShader = `
+  varying vec2 vUv;
+  
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const fragmentShader = `
+  precision highp float;
+  
+  uniform float uTime;
+  uniform vec2 uMouse;
+  uniform vec2 uResolution;
+  varying vec2 vUv;
+  
+  // Simplex 2D noise
+  vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+  vec3 permute(vec3 x) { return mod289(((x * 34.0) + 1.0) * x); }
+  
+  float snoise(vec2 v) {
+    const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439);
+    vec2 i = floor(v + dot(v, C.yy));
+    vec2 x0 = v - i + dot(i, C.xx);
+    vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+    vec4 x12 = x0.xyxy + C.xxzz;
+    x12.xy -= i1;
+    i = mod289(i);
+    vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+    vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+    m = m * m;
+    m = m * m;
+    vec3 x = 2.0 * fract(p * C.www) - 1.0;
+    vec3 h = abs(x) - 0.5;
+    vec3 ox = floor(x + 0.5);
+    vec3 a0 = x - ox;
+    m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+    vec3 g;
+    g.x = a0.x * x0.x + h.x * x0.y;
+    g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+    return 130.0 * dot(m, g);
+  }
+  
+  // FBM noise for organic feel
+  float fbm(vec2 p) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    for(int i = 0; i < 6; i++) {
+      value += amplitude * snoise(p * frequency);
+      amplitude *= 0.5;
+      frequency *= 2.0;
+    }
+    return value;
+  }
+  
+  // Voronoi for cracks
+  vec2 hash2(vec2 p) {
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return fract(sin(p) * 43758.5453);
+  }
+  
+  float voronoi(vec2 p) {
+    vec2 n = floor(p);
+    vec2 f = fract(p);
+    float md = 8.0;
+    for(int j = -1; j <= 1; j++) {
+      for(int i = -1; i <= 1; i++) {
+        vec2 g = vec2(float(i), float(j));
+        vec2 o = hash2(n + g);
+        o = 0.5 + 0.5 * sin(uTime * 0.3 + 6.2831 * o);
+        vec2 r = g + o - f;
+        float d = dot(r, r);
+        md = min(md, d);
+      }
+    }
+    return sqrt(md);
+  }
+  
+  // Crack pattern
+  float cracks(vec2 p, float scale) {
+    float v1 = voronoi(p * scale);
+    float v2 = voronoi(p * scale * 2.0 + 100.0);
+    float v3 = voronoi(p * scale * 0.5 + 50.0);
+    
+    // Edge detection for cracks
+    float edge1 = smoothstep(0.0, 0.08, v1);
+    float edge2 = smoothstep(0.0, 0.05, v2);
+    float edge3 = smoothstep(0.0, 0.12, v3);
+    
+    return min(min(edge1, edge2 * 0.7 + 0.3), edge3 * 0.5 + 0.5);
+  }
+  
+  void main() {
+    vec2 uv = vUv;
+    vec2 aspect = vec2(uResolution.x / uResolution.y, 1.0);
+    vec2 uvAspect = uv * aspect;
+    vec2 mouseAspect = uMouse * aspect;
+    
+    // Distance from mouse with smooth falloff
+    float dist = distance(uvAspect, mouseAspect);
+    float mouseInfluence = smoothstep(0.5, 0.0, dist);
+    float mouseInfluenceWide = smoothstep(0.8, 0.0, dist);
+    
+    // Time-based animation
+    float t = uTime * 0.2;
+    
+    // Base dark surface noise
+    float surfaceNoise = fbm(uv * 4.0 + t * 0.1);
+    float surfaceDetail = fbm(uv * 8.0 - t * 0.05);
+    
+    // Lava/heat noise underneath
+    float lavaNoise1 = fbm(uv * 3.0 + vec2(t * 0.3, t * 0.2));
+    float lavaNoise2 = fbm(uv * 5.0 - vec2(t * 0.2, t * 0.4) + 100.0);
+    float lavaPulse = sin(uTime * 0.5 + lavaNoise1 * 3.0) * 0.5 + 0.5;
+    
+    // Crack pattern - more visible near mouse
+    float crackPattern = cracks(uv + surfaceNoise * 0.1, 5.0);
+    float crackIntensity = 1.0 - crackPattern;
+    crackIntensity = pow(crackIntensity, 2.0);
+    
+    // Relief/displacement effect near mouse
+    float relief = fbm(uv * 6.0 + vec2(surfaceNoise, surfaceDetail) * 0.5);
+    relief = relief * mouseInfluence;
+    
+    // === Colors ===
+    
+    // Dark base colors (obsidian-like)
+    vec3 darkBase = vec3(0.02, 0.02, 0.025);
+    vec3 darkMid = vec3(0.05, 0.04, 0.045);
+    vec3 darkHighlight = vec3(0.08, 0.06, 0.07);
+    
+    // Lava/fire colors
+    vec3 lavaDeep = vec3(0.6, 0.1, 0.0);    // Deep red
+    vec3 lavaMid = vec3(0.9, 0.3, 0.0);      // Orange
+    vec3 lavaHot = vec3(1.0, 0.7, 0.2);      // Yellow-hot
+    vec3 lavaWhite = vec3(1.0, 0.95, 0.8);   // White-hot core
+    
+    // Build the dark surface
+    float surfaceMix = surfaceNoise * 0.5 + 0.5;
+    vec3 surface = mix(darkBase, darkMid, surfaceMix);
+    surface = mix(surface, darkHighlight, surfaceDetail * 0.3 + relief * 0.5);
+    
+    // Build the lava underneath
+    float lavaIntensity = lavaNoise1 * 0.6 + lavaNoise2 * 0.4;
+    lavaIntensity = lavaIntensity * 0.5 + 0.5;
+    lavaIntensity *= lavaPulse * 0.3 + 0.7; // Subtle pulsing
+    
+    vec3 lava = mix(lavaDeep, lavaMid, lavaIntensity);
+    lava = mix(lava, lavaHot, pow(lavaIntensity, 2.0));
+    lava = mix(lava, lavaWhite, pow(lavaIntensity, 4.0) * 0.5);
+    
+    // === Combine based on mouse position ===
+    
+    // Cracks reveal more lava near mouse
+    float crackReveal = crackIntensity * mouseInfluenceWide;
+    crackReveal = pow(crackReveal, 1.5);
+    
+    // General glow underneath that shows through more near mouse
+    float glowThrough = mouseInfluence * 0.6;
+    glowThrough += crackReveal * 0.8;
+    
+    // Add subtle ambient glow even without mouse
+    float ambientGlow = crackIntensity * 0.15 * (lavaPulse * 0.5 + 0.5);
+    glowThrough += ambientGlow;
+    
+    // Heightmap effect - raised areas near mouse
+    float heightEffect = relief * 0.3;
+    surface += vec3(heightEffect * 0.5, heightEffect * 0.3, heightEffect * 0.2);
+    
+    // Final color mix
+    vec3 finalColor = mix(surface, lava, glowThrough);
+    
+    // Add extra brightness in crack lines near mouse
+    float crackGlow = (1.0 - crackPattern) * mouseInfluence * 2.0;
+    crackGlow = pow(crackGlow, 1.5);
+    finalColor += lavaHot * crackGlow * 0.5;
+    
+    // Subtle edge highlight on relief
+    float edgeHighlight = fwidth(relief) * 20.0 * mouseInfluence;
+    finalColor += vec3(0.2, 0.1, 0.05) * edgeHighlight;
+    
+    // Vignette
+    float vignette = 1.0 - smoothstep(0.4, 1.4, length(uv - 0.5) * 1.5);
+    finalColor *= vignette * 0.4 + 0.6;
+    
+    // Very subtle overall lava glow at edges
+    float edgeGlow = 1.0 - vignette;
+    finalColor += lavaDeep * edgeGlow * 0.1 * (lavaPulse * 0.5 + 0.5);
+    
+    gl_FragColor = vec4(finalColor, 1.0);
+  }
+`;
+
+function init() {
+  const canvas = document.getElementById('shader-canvas') as HTMLCanvasElement;
+  if (!canvas) return;
+  
+  const renderer = new THREE.WebGLRenderer({ 
+    canvas, 
+    antialias: true,
+    powerPreference: 'high-performance'
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+  camera.position.z = 1;
+  
+  const uniforms = {
+    uTime: { value: 0 },
+    uMouse: { value: new THREE.Vector2(0.5, 0.5) },
+    uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
+  };
+  
+  const material = new THREE.ShaderMaterial({
+    vertexShader,
+    fragmentShader,
+    uniforms
+  });
+  
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+  scene.add(mesh);
+  
+  // Smooth mouse tracking
+  const targetMouse = new THREE.Vector2(0.5, 0.5);
+  const currentMouse = new THREE.Vector2(0.5, 0.5);
+  
+  // Mouse move handler
+  document.addEventListener('mousemove', (e) => {
+    targetMouse.x = e.clientX / window.innerWidth;
+    targetMouse.y = 1.0 - (e.clientY / window.innerHeight);
+  });
+  
+  // Touch support
+  document.addEventListener('touchmove', (e) => {
+    if (e.touches.length > 0) {
+      targetMouse.x = e.touches[0].clientX / window.innerWidth;
+      targetMouse.y = 1.0 - (e.touches[0].clientY / window.innerHeight);
+    }
+  });
+  
+  // Resize handler
+  window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    uniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
+  });
+  
+  // Animation loop
+  function animate() {
+    requestAnimationFrame(animate);
+    
+    uniforms.uTime.value += 0.016; // ~60fps timing
+    
+    // Smooth mouse interpolation (organic feel)
+    currentMouse.x += (targetMouse.x - currentMouse.x) * 0.08;
+    currentMouse.y += (targetMouse.y - currentMouse.y) * 0.08;
+    uniforms.uMouse.value.copy(currentMouse);
+    
+    renderer.render(scene, camera);
+  }
+  
+  animate();
+}
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+</script>
