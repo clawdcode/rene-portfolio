@@ -5,8 +5,8 @@ import Layout from '../layouts/Layout.astro';
   <main class="shader-page">
     <canvas id="shader-canvas"></canvas>
     <div class="overlay">
-      <h1>Shader Prototype V6</h1>
-      <p>Move your mouse to reveal the glowing lava beneath</p>
+      <h1>Shader Prototype V7</h1>
+      <p>Move your mouse to reveal the glowing lava beneath — now with depth!</p>
       <a href="/" class="back-link">← Back to Portfolio</a>
     </div>
   </main>
@@ -69,8 +69,26 @@ import * as THREE from 'three';
 
 const vertexShader = `
   varying vec2 vUv;
+  varying vec3 vViewDir;
+  varying vec3 vTangentViewDir;
+  
   void main() {
     vUv = uv;
+    
+    // Calculate view direction in object space
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vViewDir = normalize(cameraPosition - worldPos.xyz);
+    
+    // For a flat plane, tangent space is simple:
+    // tangent = X axis, bitangent = Y axis, normal = Z axis
+    vec3 T = vec3(1.0, 0.0, 0.0);
+    vec3 B = vec3(0.0, 1.0, 0.0);
+    vec3 N = vec3(0.0, 0.0, 1.0);
+    
+    // Transform view direction to tangent space
+    mat3 TBN = mat3(T, B, N);
+    vTangentViewDir = normalize(TBN * vViewDir);
+    
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -84,7 +102,11 @@ const fragmentShader = `
   uniform float uMouseInfluence;
   uniform sampler2D uStoneTexture;
   uniform sampler2D uLavaTexture;
+  uniform float uParallaxDepth;
+  
   varying vec2 vUv;
+  varying vec3 vViewDir;
+  varying vec3 vTangentViewDir;
   
   // ========== NOISE ==========
   vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -179,13 +201,104 @@ const fragmentShader = `
     return md;
   }
   
-  float crackPattern(vec2 uv, float scale) {
+  // ========== HEIGHT MAP GENERATION ==========
+  // Generate height from crack pattern (1.0 = stone surface, 0.0 = deep crack)
+  float getHeight(vec2 uv, float mouseInf) {
     vec2 warp = vec2(fbm(uv * 1.8 + 10.0, 4), fbm(uv * 1.8 + 20.0, 4)) * 0.2;
-    vec2 p = uv * scale + warp;
-    float edge = voronoiEdge(p);
-    edge += snoise(uv * scale * 5.0) * 0.01;
-    edge += snoise(uv * scale * 10.0) * 0.005;
-    return edge;
+    
+    // Multi-scale cracks
+    vec2 p1 = uv * 2.2 + warp;
+    vec2 p2 = uv * 4.0 + warp + 50.0;
+    vec2 p3 = uv * 6.5 + warp + 100.0;
+    
+    float edge1 = voronoiEdge(p1);
+    float edge2 = voronoiEdge(p2);
+    float edge3 = voronoiEdge(p3);
+    
+    // Add noise for roughness
+    edge1 += snoise(uv * 11.0) * 0.015;
+    edge2 += snoise(uv * 22.0) * 0.01;
+    edge3 += snoise(uv * 33.0) * 0.008;
+    
+    // Variable expansion based on noise
+    float exp1 = snoise(uv * 2.0) * 0.5 + 0.5;
+    float exp2 = snoise(uv * 4.0 + 30.0) * 0.5 + 0.5;
+    
+    // Crack widths - wider with mouse proximity
+    float w1 = 0.03 + mouseInf * 0.28 * exp1;
+    float w2 = 0.022 + mouseInf * 0.18 * exp2;
+    float w3 = 0.015 + mouseInf * 0.10 * exp1;
+    
+    // Height profile: smooth transition from surface to crack depth
+    // Using smoothstep for nice rounded edges
+    float h1 = smoothstep(0.0, w1 * 1.5, edge1);
+    float h2 = smoothstep(0.0, w2 * 1.5, edge2);
+    float h3 = smoothstep(0.0, w3 * 1.5, edge3);
+    
+    // Combine heights - major cracks go deeper
+    float height = min(h1, min(h2 * 0.7 + 0.3, h3 * 0.5 + 0.5));
+    
+    // Add stone surface detail (micro bumps)
+    float stoneBump = snoise(uv * 40.0) * 0.03 + snoise(uv * 80.0) * 0.015;
+    height += stoneBump * height; // Only on stone surface, not in cracks
+    
+    return height;
+  }
+  
+  // ========== PARALLAX OCCLUSION MAPPING ==========
+  vec2 parallaxMapping(vec2 uv, vec3 viewDir, float mouseInf) {
+    // Dynamic depth based on mouse influence
+    float depth = uParallaxDepth * (0.8 + mouseInf * 0.6);
+    
+    // Number of layers for ray marching
+    const float minLayers = 16.0;
+    const float maxLayers = 48.0;
+    float numLayers = mix(maxLayers, minLayers, abs(viewDir.z));
+    
+    float layerDepth = 1.0 / numLayers;
+    float currentLayerDepth = 0.0;
+    
+    // Direction to shift UVs per layer
+    vec2 P = viewDir.xy / viewDir.z * depth;
+    vec2 deltaUV = P / numLayers;
+    
+    vec2 currentUV = uv;
+    float currentHeight = getHeight(currentUV, mouseInf);
+    
+    // Ray march through layers
+    for(int i = 0; i < 48; i++) {
+      if(currentLayerDepth >= currentHeight) break;
+      
+      currentUV -= deltaUV;
+      currentHeight = getHeight(currentUV, mouseInf);
+      currentLayerDepth += layerDepth;
+    }
+    
+    // Interpolation for smoother result
+    vec2 prevUV = currentUV + deltaUV;
+    float afterDepth = currentHeight - currentLayerDepth;
+    float beforeDepth = getHeight(prevUV, mouseInf) - currentLayerDepth + layerDepth;
+    float weight = afterDepth / (afterDepth - beforeDepth);
+    
+    return mix(currentUV, prevUV, weight);
+  }
+  
+  // ========== NORMAL FROM HEIGHT ==========
+  vec3 getNormalFromHeight(vec2 uv, float mouseInf) {
+    float eps = 0.002;
+    float h = getHeight(uv, mouseInf);
+    float hx = getHeight(uv + vec2(eps, 0.0), mouseInf);
+    float hy = getHeight(uv + vec2(0.0, eps), mouseInf);
+    
+    // Stronger normal effect for better definition
+    float strength = 2.5;
+    vec3 normal = normalize(vec3(
+      (h - hx) * strength,
+      (h - hy) * strength,
+      1.0
+    ));
+    
+    return normal;
   }
   
   // ========== MOUSE INFLUENCE ==========
@@ -194,11 +307,56 @@ const fragmentShader = `
     vec2 uvA = uv * aspect, mouseA = mouse * aspect;
     float dist = distance(uvA, mouseA);
     
-    // Larger radius, smooth falloff
     float inf = smoothstep(0.6, 0.0, dist);
     inf = pow(inf, 1.6);
     
     return inf * baseInfluence;
+  }
+  
+  // ========== AMBIENT OCCLUSION ==========
+  float getAO(vec2 uv, float height, float mouseInf) {
+    float ao = 1.0;
+    
+    // Sample surrounding heights
+    float samples = 0.0;
+    float totalOcc = 0.0;
+    
+    for(float angle = 0.0; angle < 6.28; angle += 0.785) {
+      for(float r = 0.01; r < 0.04; r += 0.01) {
+        vec2 offset = vec2(cos(angle), sin(angle)) * r;
+        float neighborHeight = getHeight(uv + offset, mouseInf);
+        
+        // If neighbor is higher, it occludes
+        float occ = max(0.0, neighborHeight - height);
+        totalOcc += occ;
+        samples += 1.0;
+      }
+    }
+    
+    ao = 1.0 - (totalOcc / samples) * 4.0;
+    return clamp(ao, 0.3, 1.0);
+  }
+  
+  // ========== SELF-SHADOWING ==========
+  float getShadow(vec2 uv, float height, vec3 lightDir, float mouseInf) {
+    float shadow = 1.0;
+    
+    // Light direction in UV space
+    vec2 lightUV = lightDir.xy * 0.05;
+    
+    // Ray march towards light
+    for(float t = 0.1; t < 1.0; t += 0.15) {
+      vec2 sampleUV = uv + lightUV * t;
+      float sampleHeight = getHeight(sampleUV, mouseInf);
+      
+      // If sample is higher than our projected height, we're in shadow
+      float projectedHeight = height + lightDir.z * t * 0.3;
+      if(sampleHeight > projectedHeight + 0.02) {
+        shadow *= 0.7;
+      }
+    }
+    
+    return clamp(shadow, 0.4, 1.0);
   }
   
   // ========== MAIN ==========
@@ -207,107 +365,117 @@ const fragmentShader = `
     float time = uTime;
     float mouseInf = getMouseInfluence(uv, uMouse, uMouseInfluence);
     
+    // View direction for parallax (simplified for ortho camera)
+    vec3 viewDir = normalize(vTangentViewDir);
+    // Add subtle view angle variation based on UV position for more depth perception
+    viewDir.xy += (uv - 0.5) * 0.3;
+    viewDir = normalize(viewDir);
+    
+    // Apply parallax mapping
+    vec2 parallaxUV = parallaxMapping(uv, viewDir, mouseInf);
+    
+    // Get height at final UV
+    float height = getHeight(parallaxUV, mouseInf);
+    
+    // Get normal for lighting
+    vec3 normal = getNormalFromHeight(parallaxUV, mouseInf);
+    
+    // Calculate AO and shadows
+    float ao = getAO(parallaxUV, height, mouseInf);
+    
+    // Light from upper-left
+    vec3 lightDir = normalize(vec3(0.5, 0.5, 0.8));
+    float shadow = getShadow(parallaxUV, height, lightDir, mouseInf);
+    
     // === SAMPLE TEXTURES ===
-    vec2 stoneUV = uv * 3.0;
-    vec2 lavaUV = uv * 2.0;
+    vec2 stoneUV = parallaxUV * 3.0;
+    vec2 lavaUV = parallaxUV * 2.0;
     
     // Add flowing motion to lava
     lavaUV.x += time * 0.02;
-    lavaUV.y += sin(uv.x * 5.0 + time * 0.3) * 0.02;
+    lavaUV.y += sin(parallaxUV.x * 5.0 + time * 0.3) * 0.02;
     
     vec3 stoneColor = texture2D(uStoneTexture, stoneUV).rgb;
     vec3 lavaTexColor = texture2D(uLavaTexture, lavaUV).rgb;
     
-    // === STONE: Dark basalt look ===
+    // === STONE: Dark basalt look with lighting ===
     stoneColor = pow(stoneColor, vec3(1.6)) * 0.4;
     
+    // Apply lighting to stone
+    float diffuse = max(dot(normal, lightDir), 0.0);
+    float ambient = 0.3;
+    float lighting = ambient + diffuse * 0.7;
+    lighting *= ao * shadow;
+    
+    stoneColor *= lighting;
+    
+    // Rim lighting on edges
+    float rim = 1.0 - max(dot(normal, vec3(0.0, 0.0, 1.0)), 0.0);
+    rim = pow(rim, 3.0);
+    stoneColor += vec3(0.05, 0.03, 0.02) * rim;
+    
     // === LAVA: Convert texture to proper orange/yellow lava colors ===
-    // Use the texture's luminance to drive the lava intensity
     float lavaLum = dot(lavaTexColor, vec3(0.299, 0.587, 0.114));
     
-    // Create proper lava color gradient: dark red -> orange -> yellow -> white-hot
     vec3 lavaColor;
     if (lavaLum < 0.3) {
-      // Dark/cool areas: deep red
       lavaColor = mix(vec3(0.15, 0.02, 0.0), vec3(0.6, 0.1, 0.0), lavaLum / 0.3);
     } else if (lavaLum < 0.6) {
-      // Medium: red to orange
       float t = (lavaLum - 0.3) / 0.3;
       lavaColor = mix(vec3(0.6, 0.1, 0.0), vec3(1.0, 0.4, 0.0), t);
     } else if (lavaLum < 0.85) {
-      // Hot: orange to yellow
       float t = (lavaLum - 0.6) / 0.25;
       lavaColor = mix(vec3(1.0, 0.4, 0.0), vec3(1.0, 0.8, 0.2), t);
     } else {
-      // White-hot core
       float t = (lavaLum - 0.85) / 0.15;
       lavaColor = mix(vec3(1.0, 0.8, 0.2), vec3(1.0, 1.0, 0.8), t);
     }
     
-    // Emissive boost for glow effect
     float emissive = 1.8 + lavaLum * 1.2;
     lavaColor *= emissive;
     
-    // === CRACKS ===
-    float crack1 = crackPattern(uv, 2.2);
-    float crack2 = crackPattern(uv + 50.0, 4.0);
-    float crack3 = crackPattern(uv + 100.0, 6.5);
+    // === CRACK MASKING (using height) ===
+    // Lower height = deeper crack = more lava visible
+    float crackMask = 1.0 - smoothstep(0.1, 0.5, height);
+    float coreMask = 1.0 - smoothstep(0.0, 0.2, height);
+    float glowMask = 1.0 - smoothstep(0.2, 0.7, height);
     
-    // Variable expansion based on noise
-    float exp1 = snoise(uv * 2.0) * 0.5 + 0.5;
-    float exp2 = snoise(uv * 4.0 + 30.0) * 0.5 + 0.5;
+    // === DEPTH-BASED LAVA INTENSITY ===
+    // Deeper in the crack = brighter lava
+    float depthIntensity = 1.0 + (1.0 - height) * 0.5;
     
-    // Crack widths - wider with mouse proximity
-    float w1 = 0.025 + mouseInf * 0.25 * exp1;
-    float w2 = 0.018 + mouseInf * 0.15 * exp2;
-    float w3 = 0.012 + mouseInf * 0.08 * exp1;
+    // Pulsing animation
+    float pulse = sin(time * 0.5 + snoise(parallaxUV * 2.5) * 4.0) * 0.1 + 1.0;
     
-    float m1 = 1.0 - smoothstep(0.0, w1, crack1);
-    float m2 = 1.0 - smoothstep(0.0, w2, crack2);
-    float m3 = 1.0 - smoothstep(0.0, w3, crack3);
-    
-    // Core (hottest center of cracks)
-    float c1 = 1.0 - smoothstep(0.0, w1 * 0.3, crack1);
-    float c2 = 1.0 - smoothstep(0.0, w2 * 0.3, crack2);
-    
-    float crackMask = max(m1, max(m2 * 0.85, m3 * 0.55));
-    float coreMask = max(c1, c2 * 0.75);
-    
-    // Glow around cracks (wider halo)
-    float g1 = 1.0 - smoothstep(0.0, w1 * 5.0, crack1);
-    float g2 = 1.0 - smoothstep(0.0, w2 * 4.0, crack2);
-    float glowMask = max(g1 * 0.6, g2 * 0.4);
+    // Final lava with pulse, depth, and mouse boost
+    vec3 finalLava = lavaColor * pulse * depthIntensity;
+    finalLava *= 1.0 + mouseInf * 0.5;
     
     // === COMPOSITE ===
     vec3 stone = stoneColor;
     
     // Orange glow on stone near cracks (subsurface scattering)
     float ssGlow = glowMask * (0.5 + mouseInf * 0.7);
-    stone += vec3(0.12, 0.03, 0.0) * ssGlow;
+    stone += vec3(0.12, 0.03, 0.0) * ssGlow * ao;
     
-    // Slightly darken stone in glow zones
-    stone *= 1.0 - glowMask * 0.15;
-    
-    // Pulsing animation
-    float pulse = sin(time * 0.5 + snoise(uv * 2.5) * 4.0) * 0.1 + 1.0;
-    
-    // Final lava with pulse and mouse boost
-    vec3 finalLava = lavaColor * pulse;
-    finalLava *= 1.0 + mouseInf * 0.5;
-    
-    // Mix stone and lava based on crack mask
-    float lavaMix = smoothstep(0.02, 0.25, crackMask);
+    // Mix stone and lava based on crack depth
+    float lavaMix = smoothstep(0.05, 0.35, crackMask);
     vec3 final = mix(stone, finalLava, lavaMix);
     
-    // Add rim glow at crack edges
-    float rim = max(glowMask - crackMask * 0.5, 0.0);
-    final += vec3(0.3, 0.08, 0.0) * rim * (0.6 + mouseInf * 0.5);
+    // Add rim glow at crack edges (where height transitions)
+    float edgeGlow = max(glowMask - crackMask * 0.5, 0.0);
+    final += vec3(0.3, 0.08, 0.0) * edgeGlow * (0.6 + mouseInf * 0.5) * shadow;
     
-    // Add extra brightness to core (white-hot center)
+    // Add extra brightness to deepest parts
     final += vec3(0.4, 0.25, 0.05) * coreMask * (0.4 + mouseInf * 0.4);
     
+    // === DEPTH FOG IN CRACKS ===
+    // Slight haze in deep cracks for atmosphere
+    float depthFog = (1.0 - height) * 0.08;
+    final = mix(final, final * vec3(1.1, 0.9, 0.8), depthFog * crackMask);
+    
     // === POST PROCESSING ===
-    // Subtle vignette
+    // Vignette
     float vig = 1.0 - smoothstep(0.4, 1.4, length(uv - 0.5) * 1.1);
     final *= 0.85 + vig * 0.15;
     
@@ -330,7 +498,7 @@ function init() {
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
   camera.position.z = 1;
   
-  // Load textures with correct GitHub Pages base path
+  // Load textures
   const textureLoader = new THREE.TextureLoader();
   const basePath = '/rene-portfolio';
   
@@ -360,7 +528,8 @@ function init() {
     uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
     uMouseInfluence: { value: 0.45 },
     uStoneTexture: { value: stoneTexture },
-    uLavaTexture: { value: lavaTexture }
+    uLavaTexture: { value: lavaTexture },
+    uParallaxDepth: { value: 0.08 }  // Adjustable depth
   };
   
   const material = new THREE.ShaderMaterial({ vertexShader, fragmentShader, uniforms });
@@ -394,6 +563,18 @@ function init() {
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     uniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
+  });
+  
+  // Keyboard controls for depth adjustment
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '+' || e.key === '=') {
+      uniforms.uParallaxDepth.value = Math.min(0.2, uniforms.uParallaxDepth.value + 0.01);
+      console.log('Parallax depth:', uniforms.uParallaxDepth.value);
+    }
+    if (e.key === '-') {
+      uniforms.uParallaxDepth.value = Math.max(0.02, uniforms.uParallaxDepth.value - 0.01);
+      console.log('Parallax depth:', uniforms.uParallaxDepth.value);
+    }
   });
   
   function animate() {
