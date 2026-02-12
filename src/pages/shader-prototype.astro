@@ -5,8 +5,8 @@ import Layout from '../layouts/Layout.astro';
   <main class="shader-page">
     <canvas id="shader-canvas"></canvas>
     <div class="overlay">
-      <h1>Shader Prototype V5</h1>
-      <p>Move your mouse to reveal the lava beneath</p>
+      <h1>Shader Prototype V6</h1>
+      <p>Move your mouse to reveal the glowing lava beneath</p>
       <a href="/" class="back-link">← Back to Portfolio</a>
     </div>
   </main>
@@ -188,15 +188,15 @@ const fragmentShader = `
     return edge;
   }
   
-  // ========== MOUSE INFLUENCE (simple circle) ==========
+  // ========== MOUSE INFLUENCE ==========
   float getMouseInfluence(vec2 uv, vec2 mouse, float baseInfluence) {
     vec2 aspect = vec2(uResolution.x / uResolution.y, 1.0);
     vec2 uvA = uv * aspect, mouseA = mouse * aspect;
     float dist = distance(uvA, mouseA);
     
-    // Simple circular falloff
-    float inf = smoothstep(0.5, 0.0, dist);
-    inf = pow(inf, 1.8);
+    // Larger radius, stronger falloff
+    float inf = smoothstep(0.7, 0.0, dist);
+    inf = pow(inf, 1.5);
     
     return inf * baseInfluence;
   }
@@ -208,89 +208,109 @@ const fragmentShader = `
     float mouseInf = getMouseInfluence(uv, uMouse, uMouseInfluence);
     
     // === SAMPLE TEXTURES ===
-    // Scale UV for tiling (adjust as needed)
     vec2 stoneUV = uv * 3.0;
     vec2 lavaUV = uv * 2.0;
     
-    // Add subtle flow to lava UV
-    lavaUV.x += time * 0.02;
-    lavaUV.y += sin(uv.x * 5.0 + time * 0.3) * 0.02;
+    // Add flowing motion to lava
+    lavaUV.x += time * 0.03;
+    lavaUV.y += sin(uv.x * 5.0 + time * 0.4) * 0.03;
     
     vec3 stoneColor = texture2D(uStoneTexture, stoneUV).rgb;
     vec3 lavaColor = texture2D(uLavaTexture, lavaUV).rgb;
     
-    // Darken the stone texture significantly for that basalt look
-    stoneColor = pow(stoneColor, vec3(1.5)) * 0.4;
+    // === STONE: Keep dark basalt look ===
+    stoneColor = pow(stoneColor, vec3(1.8)) * 0.35;
     
-    // Enhance lava brightness
-    lavaColor = pow(lavaColor, vec3(0.8)) * 1.3;
+    // === LAVA: MAKE IT GLOW! ===
+    // Boost the lava significantly - this is the key fix!
+    lavaColor = pow(lavaColor, vec3(0.6)); // Lift darks
+    
+    // Calculate luminance and boost based on it (brighter parts glow more)
+    float lavaLum = dot(lavaColor, vec3(0.299, 0.587, 0.114));
+    
+    // Emissive boost - multiply by 2.5 to 3.5 for proper glow
+    float emissiveBoost = 2.5 + lavaLum * 1.5;
+    lavaColor *= emissiveBoost;
+    
+    // Add extra orange/yellow to the brightest parts
+    lavaColor += vec3(0.6, 0.2, 0.0) * lavaLum * 1.5;
     
     // === CRACKS ===
     float crack1 = crackPattern(uv, 2.2);
     float crack2 = crackPattern(uv + 50.0, 4.0);
     float crack3 = crackPattern(uv + 100.0, 6.5);
     
-    // Variable expansion
+    // Variable expansion based on noise
     float exp1 = snoise(uv * 2.0) * 0.5 + 0.5;
     float exp2 = snoise(uv * 4.0 + 30.0) * 0.5 + 0.5;
     
-    // Crack widths - widen with mouse proximity
-    float w1 = 0.035 + mouseInf * 0.22 * exp1;
-    float w2 = 0.025 + mouseInf * 0.12 * exp2;
-    float w3 = 0.015 + mouseInf * 0.06 * exp1;
+    // Crack widths - MUCH wider with mouse, always some visible
+    float baseWidth = 0.04; // Wider base cracks (always some lava visible)
+    float w1 = baseWidth + 0.015 + mouseInf * 0.35 * exp1;
+    float w2 = baseWidth * 0.7 + mouseInf * 0.20 * exp2;
+    float w3 = baseWidth * 0.4 + mouseInf * 0.12 * exp1;
     
     float m1 = 1.0 - smoothstep(0.0, w1, crack1);
     float m2 = 1.0 - smoothstep(0.0, w2, crack2);
     float m3 = 1.0 - smoothstep(0.0, w3, crack3);
     
-    // Core (hottest part)
-    float c1 = 1.0 - smoothstep(0.0, w1 * 0.35, crack1);
-    float c2 = 1.0 - smoothstep(0.0, w2 * 0.35, crack2);
+    // Core (hottest center of cracks)
+    float c1 = 1.0 - smoothstep(0.0, w1 * 0.3, crack1);
+    float c2 = 1.0 - smoothstep(0.0, w2 * 0.3, crack2);
     
     float crackMask = max(m1, max(m2 * 0.85, m3 * 0.55));
     float coreMask = max(c1, c2 * 0.75);
     
-    // Glow around cracks
-    float g1 = 1.0 - smoothstep(0.0, w1 * 5.0, crack1);
-    float g2 = 1.0 - smoothstep(0.0, w2 * 4.0, crack2);
-    float glowMask = max(g1 * 0.65, g2 * 0.45);
+    // Glow around cracks (wider halo)
+    float g1 = 1.0 - smoothstep(0.0, w1 * 6.0, crack1);
+    float g2 = 1.0 - smoothstep(0.0, w2 * 5.0, crack2);
+    float glowMask = max(g1 * 0.7, g2 * 0.5);
     
     // === COMPOSITE ===
     vec3 stone = stoneColor;
     
-    // Add subtle orange glow to stone near cracks
-    stone += vec3(0.08, 0.02, 0.0) * glowMask * (0.5 + mouseInf * 0.6);
+    // Orange glow on stone near cracks (subsurface scattering effect)
+    float ssGlow = glowMask * (0.6 + mouseInf * 0.8);
+    stone += vec3(0.15, 0.04, 0.0) * ssGlow;
     
-    // Darken stone where there's glow (subsurface effect)
-    stone *= 1.0 - glowMask * 0.3;
+    // Darken stone in glow zones slightly
+    stone *= 1.0 - glowMask * 0.2;
     
     // Calculate lava intensity
-    float lavaInt = crackMask * (0.6 + mouseInf * 0.5);
-    lavaInt += coreMask * 0.4;
+    float lavaInt = crackMask * (0.7 + mouseInf * 0.4);
+    lavaInt += coreMask * 0.35;
     lavaInt = clamp(lavaInt, 0.0, 1.0);
     
-    // Add pulsing to lava
-    float pulse = sin(time * 0.5 + snoise(uv * 2.5) * 4.0) * 0.08 + 1.0;
-    lavaColor *= pulse;
+    // Pulsing animation
+    float pulse = sin(time * 0.6 + snoise(uv * 2.5) * 4.0) * 0.12 + 1.0;
     
-    // Mix stone and lava based on crack mask
-    float lavaMix = smoothstep(0.03, 0.35, crackMask);
-    vec3 final = mix(stone, lavaColor, lavaMix);
+    // Final lava color with pulse and mouse boost
+    vec3 finalLava = lavaColor * pulse;
     
-    // Add rim glow at crack edges
-    float rim = max(glowMask - crackMask * 0.55, 0.0);
-    final += vec3(0.2, 0.05, 0.0) * rim * (0.7 + mouseInf * 0.5);
+    // Extra brightness boost when mouse is near
+    finalLava *= 1.0 + mouseInf * 0.8;
+    
+    // Mix stone and lava
+    float lavaMix = smoothstep(0.02, 0.3, crackMask);
+    vec3 final = mix(stone, finalLava, lavaMix);
+    
+    // Add rim glow at crack edges (bright orange halo)
+    float rim = max(glowMask - crackMask * 0.5, 0.0);
+    final += vec3(0.4, 0.12, 0.0) * rim * (0.8 + mouseInf * 0.6);
+    
+    // Add extra emissive to core (white-hot center)
+    final += vec3(0.5, 0.3, 0.1) * coreMask * (0.5 + mouseInf * 0.5);
     
     // === POST PROCESSING ===
-    // Vignette
-    float vig = 1.0 - smoothstep(0.3, 1.3, length(uv - 0.5) * 1.15);
-    final *= 0.8 + vig * 0.2;
+    // Subtle vignette
+    float vig = 1.0 - smoothstep(0.4, 1.4, length(uv - 0.5) * 1.1);
+    final *= 0.85 + vig * 0.15;
     
-    // Slight gamma adjustment
-    final = pow(final, vec3(0.95));
+    // Very subtle gamma (don't crush the brightness!)
+    final = pow(final, vec3(0.98));
     
-    // Film grain
-    final += hash(uv * 1000.0 + time) * 0.015 - 0.0075;
+    // Minimal film grain
+    final += hash(uv * 1000.0 + time) * 0.012 - 0.006;
     
     gl_FragColor = vec4(final, 1.0);
   }
@@ -308,26 +328,49 @@ function init() {
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
   camera.position.z = 1;
   
-  // Load textures
+  // Load textures with correct GitHub Pages base path
   const textureLoader = new THREE.TextureLoader();
+  const basePath = '/rene-portfolio';
   
-  const stoneTexture = textureLoader.load('/textures/stone.jpg', (tex) => {
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.minFilter = THREE.LinearMipmapLinearFilter;
-    tex.magFilter = THREE.LinearFilter;
-  });
+  let texturesLoaded = 0;
+  const onTextureLoad = () => {
+    texturesLoaded++;
+    console.log(`Texture loaded (${texturesLoaded}/2)`);
+  };
   
-  const lavaTexture = textureLoader.load('/textures/lava.png', (tex) => {
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.minFilter = THREE.LinearMipmapLinearFilter;
-    tex.magFilter = THREE.LinearFilter;
-  });
+  const onTextureError = (url: string) => (err: unknown) => {
+    console.error(`Failed to load texture: ${url}`, err);
+  };
+  
+  const stoneTexture = textureLoader.load(
+    `${basePath}/textures/stone.jpg`,
+    (tex) => {
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      onTextureLoad();
+    },
+    undefined,
+    onTextureError(`${basePath}/textures/stone.jpg`)
+  );
+  
+  const lavaTexture = textureLoader.load(
+    `${basePath}/textures/lava.png`,
+    (tex) => {
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      onTextureLoad();
+    },
+    undefined,
+    onTextureError(`${basePath}/textures/lava.png`)
+  );
   
   const uniforms = {
     uTime: { value: 0 },
     uMouse: { value: new THREE.Vector2(0.5, 0.5) },
     uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-    uMouseInfluence: { value: 0.35 },
+    uMouseInfluence: { value: 0.5 }, // Higher base influence
     uStoneTexture: { value: stoneTexture },
     uLavaTexture: { value: lavaTexture }
   };
@@ -338,27 +381,28 @@ function init() {
   
   const targetMouse = new THREE.Vector2(0.5, 0.5);
   const currentMouse = new THREE.Vector2(0.5, 0.5);
-  let targetInfluence = 0.35, currentInfluence = 0.35, lastMouseMove = Date.now();
+  let targetInfluence = 0.5, currentInfluence = 0.5, lastMouseMove = Date.now();
   
   document.addEventListener('mousemove', (e) => {
     targetMouse.x = e.clientX / window.innerWidth;
     targetMouse.y = 1.0 - (e.clientY / window.innerHeight);
     lastMouseMove = Date.now();
-    targetInfluence = Math.min(1.0, targetInfluence + 0.06);
+    // Ramp up faster, higher max
+    targetInfluence = Math.min(1.2, targetInfluence + 0.1);
   });
   
-  document.addEventListener('mouseleave', () => { targetInfluence = 0.25; });
+  document.addEventListener('mouseleave', () => { targetInfluence = 0.4; });
   
   document.addEventListener('touchmove', (e) => {
     if (e.touches.length > 0) {
       targetMouse.x = e.touches[0].clientX / window.innerWidth;
       targetMouse.y = 1.0 - (e.touches[0].clientY / window.innerHeight);
       lastMouseMove = Date.now();
-      targetInfluence = 1.0;
+      targetInfluence = 1.3;
     }
   });
   
-  document.addEventListener('touchend', () => { targetInfluence = 0.35; });
+  document.addEventListener('touchend', () => { targetInfluence = 0.5; });
   
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -369,13 +413,17 @@ function init() {
     requestAnimationFrame(animate);
     uniforms.uTime.value += 0.016;
     
-    currentMouse.x += (targetMouse.x - currentMouse.x) * 0.045;
-    currentMouse.y += (targetMouse.y - currentMouse.y) * 0.045;
+    // Smoother mouse follow
+    currentMouse.x += (targetMouse.x - currentMouse.x) * 0.06;
+    currentMouse.y += (targetMouse.y - currentMouse.y) * 0.06;
     uniforms.uMouse.value.copy(currentMouse);
     
-    if (Date.now() - lastMouseMove > 1200) targetInfluence = Math.max(0.25, targetInfluence - 0.003);
+    // Decay influence when idle
+    if (Date.now() - lastMouseMove > 800) {
+      targetInfluence = Math.max(0.4, targetInfluence - 0.004);
+    }
     
-    const speed = currentInfluence < targetInfluence ? 0.025 : 0.01;
+    const speed = currentInfluence < targetInfluence ? 0.04 : 0.015;
     currentInfluence += (targetInfluence - currentInfluence) * speed;
     uniforms.uMouseInfluence.value = currentInfluence;
     
