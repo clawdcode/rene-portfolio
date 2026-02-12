@@ -5,8 +5,8 @@ import Layout from '../layouts/Layout.astro';
   <main class="shader-page">
     <canvas id="shader-canvas"></canvas>
     <div class="overlay">
-      <h1>Shader Prototype V4</h1>
-      <p>Move your mouse to see the cracks form</p>
+      <h1>Shader Prototype V5</h1>
+      <p>Move your mouse to reveal the lava beneath</p>
       <a href="/" class="back-link">← Back to Portfolio</a>
     </div>
   </main>
@@ -82,6 +82,8 @@ const fragmentShader = `
   uniform vec2 uMouse;
   uniform vec2 uResolution;
   uniform float uMouseInfluence;
+  uniform sampler2D uStoneTexture;
+  uniform sampler2D uLavaTexture;
   varying vec2 vUv;
   
   // ========== NOISE ==========
@@ -186,114 +188,15 @@ const fragmentShader = `
     return edge;
   }
   
-  // ========== PHOTOREALISTIC STONE ==========
-  vec3 stoneTexture(vec2 uv) {
-    // Heavy multi-octave noise for rough basalt
-    float n1 = fbm(uv * 2.5, 6) * 0.45;
-    float n2 = fbm(uv * 6.0 + 100.0, 5) * 0.25;
-    float n3 = fbm(uv * 14.0 + 200.0, 4) * 0.15;
-    float n4 = snoise(uv * 28.0) * 0.1;
-    float n5 = snoise(uv * 55.0) * 0.06;
-    float n6 = snoise(uv * 110.0) * 0.03;
-    float n7 = snoise(uv * 220.0) * 0.015;
-    
-    float height = n1 + n2 + n3 + n4 + n5 + n6 + n7;
-    height = height * 0.5 + 0.5;
-    
-    // Sharp height contrast for visible bumps
-    height = pow(height, 0.85);
-    
-    // Dark basalt palette
-    vec3 black = vec3(0.008, 0.008, 0.012);
-    vec3 veryDark = vec3(0.025, 0.023, 0.03);
-    vec3 dark = vec3(0.055, 0.05, 0.065);
-    vec3 mid = vec3(0.095, 0.085, 0.105);
-    vec3 light = vec3(0.14, 0.125, 0.155);
-    vec3 highlight = vec3(0.2, 0.18, 0.22);
-    
-    vec3 color = black;
-    color = mix(color, veryDark, smoothstep(0.15, 0.3, height));
-    color = mix(color, dark, smoothstep(0.3, 0.45, height));
-    color = mix(color, mid, smoothstep(0.45, 0.6, height));
-    color = mix(color, light, smoothstep(0.6, 0.78, height) * 0.7);
-    color = mix(color, highlight, smoothstep(0.85, 1.0, height) * 0.5);
-    
-    // Color variation
-    float warm = snoise(uv * 4.0 + 30.0) * 0.5 + 0.5;
-    color *= 0.9 + warm * 0.15;
-    color += vec3(0.01, 0.0, -0.01) * (warm - 0.5);
-    
-    // Specular highlights on peaks
-    float spec = pow(max(height - 0.7, 0.0) * 3.3, 2.0) * 0.08;
-    color += vec3(spec);
-    
-    return color;
-  }
-  
-  // ========== PHOTOREALISTIC LAVA ==========
-  vec3 lavaColor(float intensity, vec2 uv, float time) {
-    vec2 flow = uv;
-    flow.x += time * 0.012;
-    flow.y += sin(uv.x * 5.0 + time * 0.3) * 0.01;
-    
-    // Surface turbulence
-    float n1 = snoise(flow * 5.0 + time * 0.06) * 0.5 + 0.5;
-    float n2 = snoise(flow * 10.0 - time * 0.1) * 0.5 + 0.5;
-    float n3 = snoise(flow * 20.0 + time * 0.05) * 0.5 + 0.5;
-    float turb = n1 * 0.5 + n2 * 0.3 + n3 * 0.2;
-    
-    // Temperature
-    float temp = intensity * (0.6 + turb * 0.6);
-    temp = pow(temp, 0.55); // Brighter overall
-    
-    // Hot streaks
-    float streak = abs(snoise(vec2(uv.x * 30.0 + time * 0.15, uv.y * 4.0)));
-    streak = pow(streak, 2.0) * 0.3;
-    temp += streak * intensity;
-    
-    // Bubbling bright spots
-    float bubble = snoise(flow * 8.0 + time * 0.2);
-    bubble = pow(max(bubble, 0.0), 3.0) * 0.4;
-    temp += bubble * intensity;
-    
-    temp = clamp(temp, 0.0, 1.0);
-    
-    // Rich lava gradient - more yellow/white in hot areas
-    vec3 darkCrust = vec3(0.1, 0.01, 0.0);
-    vec3 darkRed = vec3(0.3, 0.03, 0.0);
-    vec3 red = vec3(0.6, 0.1, 0.0);
-    vec3 orange = vec3(0.9, 0.32, 0.02);
-    vec3 yellow = vec3(1.0, 0.6, 0.1);
-    vec3 hotYellow = vec3(1.0, 0.8, 0.3);
-    vec3 white = vec3(1.0, 0.95, 0.75);
-    
-    vec3 color = darkCrust;
-    color = mix(color, darkRed, smoothstep(0.0, 0.12, temp));
-    color = mix(color, red, smoothstep(0.12, 0.25, temp));
-    color = mix(color, orange, smoothstep(0.25, 0.45, temp));
-    color = mix(color, yellow, smoothstep(0.45, 0.65, temp));
-    color = mix(color, hotYellow, smoothstep(0.65, 0.82, temp));
-    color = mix(color, white, smoothstep(0.85, 1.0, temp) * 0.9);
-    
-    return color;
-  }
-  
-  // ========== MOUSE INFLUENCE ==========
-  float getMouseInfluence(vec2 uv, vec2 mouse, float baseInfluence, float time) {
+  // ========== MOUSE INFLUENCE (simple circle) ==========
+  float getMouseInfluence(vec2 uv, vec2 mouse, float baseInfluence) {
     vec2 aspect = vec2(uResolution.x / uResolution.y, 1.0);
     vec2 uvA = uv * aspect, mouseA = mouse * aspect;
     float dist = distance(uvA, mouseA);
     
-    // Irregular falloff
-    float noise = snoise(uv * 3.5 + time * 0.06) * 0.12;
-    noise += snoise(uv * 7.0 - time * 0.08) * 0.06;
-    dist += noise;
-    
-    float inf = smoothstep(0.65, 0.0, dist);
-    inf = pow(inf, 2.0);
-    
-    float angle = atan(uvA.y - mouseA.y, uvA.x - mouseA.x);
-    inf *= sin(angle * 3.0 + time * 0.15) * 0.1 + 1.0;
+    // Simple circular falloff
+    float inf = smoothstep(0.5, 0.0, dist);
+    inf = pow(inf, 1.8);
     
     return inf * baseInfluence;
   }
@@ -302,7 +205,25 @@ const fragmentShader = `
   void main() {
     vec2 uv = vUv;
     float time = uTime;
-    float mouseInf = getMouseInfluence(uv, uMouse, uMouseInfluence, time);
+    float mouseInf = getMouseInfluence(uv, uMouse, uMouseInfluence);
+    
+    // === SAMPLE TEXTURES ===
+    // Scale UV for tiling (adjust as needed)
+    vec2 stoneUV = uv * 3.0;
+    vec2 lavaUV = uv * 2.0;
+    
+    // Add subtle flow to lava UV
+    lavaUV.x += time * 0.02;
+    lavaUV.y += sin(uv.x * 5.0 + time * 0.3) * 0.02;
+    
+    vec3 stoneColor = texture2D(uStoneTexture, stoneUV).rgb;
+    vec3 lavaColor = texture2D(uLavaTexture, lavaUV).rgb;
+    
+    // Darken the stone texture significantly for that basalt look
+    stoneColor = pow(stoneColor, vec3(1.5)) * 0.4;
+    
+    // Enhance lava brightness
+    lavaColor = pow(lavaColor, vec3(0.8)) * 1.3;
     
     // === CRACKS ===
     float crack1 = crackPattern(uv, 2.2);
@@ -313,7 +234,7 @@ const fragmentShader = `
     float exp1 = snoise(uv * 2.0) * 0.5 + 0.5;
     float exp2 = snoise(uv * 4.0 + 30.0) * 0.5 + 0.5;
     
-    // WIDER cracks
+    // Crack widths - widen with mouse proximity
     float w1 = 0.035 + mouseInf * 0.22 * exp1;
     float w2 = 0.025 + mouseInf * 0.12 * exp2;
     float w3 = 0.015 + mouseInf * 0.06 * exp1;
@@ -322,49 +243,53 @@ const fragmentShader = `
     float m2 = 1.0 - smoothstep(0.0, w2, crack2);
     float m3 = 1.0 - smoothstep(0.0, w3, crack3);
     
-    // Core (hottest)
+    // Core (hottest part)
     float c1 = 1.0 - smoothstep(0.0, w1 * 0.35, crack1);
     float c2 = 1.0 - smoothstep(0.0, w2 * 0.35, crack2);
     
     float crackMask = max(m1, max(m2 * 0.85, m3 * 0.55));
     float coreMask = max(c1, c2 * 0.75);
     
-    // Glow
+    // Glow around cracks
     float g1 = 1.0 - smoothstep(0.0, w1 * 5.0, crack1);
     float g2 = 1.0 - smoothstep(0.0, w2 * 4.0, crack2);
     float glowMask = max(g1 * 0.65, g2 * 0.45);
     
-    // === STONE ===
-    vec3 stone = stoneTexture(uv);
-    stone *= 1.0 - glowMask * 0.55;
+    // === COMPOSITE ===
+    vec3 stone = stoneColor;
     
-    // === LAVA ===
-    float lavaInt = crackMask * (0.55 + mouseInf * 0.65);
-    lavaInt += coreMask * 0.5;
+    // Add subtle orange glow to stone near cracks
+    stone += vec3(0.08, 0.02, 0.0) * glowMask * (0.5 + mouseInf * 0.6);
+    
+    // Darken stone where there's glow (subsurface effect)
+    stone *= 1.0 - glowMask * 0.3;
+    
+    // Calculate lava intensity
+    float lavaInt = crackMask * (0.6 + mouseInf * 0.5);
+    lavaInt += coreMask * 0.4;
     lavaInt = clamp(lavaInt, 0.0, 1.0);
     
-    vec3 lava = lavaColor(lavaInt, uv, time);
-    float pulse = sin(time * 0.5 + snoise(uv * 2.5) * 4.0) * 0.06 + 1.0;
-    lava *= pulse;
+    // Add pulsing to lava
+    float pulse = sin(time * 0.5 + snoise(uv * 2.5) * 4.0) * 0.08 + 1.0;
+    lavaColor *= pulse;
     
-    // === COMPOSITE ===
-    vec3 final = stone;
+    // Mix stone and lava based on crack mask
+    float lavaMix = smoothstep(0.03, 0.35, crackMask);
+    vec3 final = mix(stone, lavaColor, lavaMix);
     
-    // Subsurface glow
-    final += vec3(0.1, 0.02, 0.0) * glowMask * (0.5 + mouseInf * 0.6);
-    
-    // Lava in cracks
-    float lavaMix = smoothstep(0.03, 0.3, crackMask);
-    final = mix(final, lava, lavaMix);
-    
-    // Edge rim glow
+    // Add rim glow at crack edges
     float rim = max(glowMask - crackMask * 0.55, 0.0);
-    final += vec3(0.18, 0.04, 0.0) * rim * (0.7 + mouseInf * 0.5);
+    final += vec3(0.2, 0.05, 0.0) * rim * (0.7 + mouseInf * 0.5);
     
-    // === POST ===
+    // === POST PROCESSING ===
+    // Vignette
     float vig = 1.0 - smoothstep(0.3, 1.3, length(uv - 0.5) * 1.15);
     final *= 0.8 + vig * 0.2;
-    final = pow(final, vec3(0.93));
+    
+    // Slight gamma adjustment
+    final = pow(final, vec3(0.95));
+    
+    // Film grain
     final += hash(uv * 1000.0 + time) * 0.015 - 0.0075;
     
     gl_FragColor = vec4(final, 1.0);
@@ -383,11 +308,28 @@ function init() {
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
   camera.position.z = 1;
   
+  // Load textures
+  const textureLoader = new THREE.TextureLoader();
+  
+  const stoneTexture = textureLoader.load('/textures/stone.jpg', (tex) => {
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+  });
+  
+  const lavaTexture = textureLoader.load('/textures/lava.png', (tex) => {
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+  });
+  
   const uniforms = {
     uTime: { value: 0 },
     uMouse: { value: new THREE.Vector2(0.5, 0.5) },
     uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-    uMouseInfluence: { value: 0.35 }
+    uMouseInfluence: { value: 0.35 },
+    uStoneTexture: { value: stoneTexture },
+    uLavaTexture: { value: lavaTexture }
   };
   
   const material = new THREE.ShaderMaterial({ vertexShader, fragmentShader, uniforms });
