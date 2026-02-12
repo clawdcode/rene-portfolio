@@ -84,7 +84,7 @@ const fragmentShader = `
   uniform vec2 uResolution;
   varying vec2 vUv;
   
-  // Hash functions for noise
+  // Hash functions
   float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
   }
@@ -94,7 +94,12 @@ const fragmentShader = `
     return fract(sin(p) * 43758.5453);
   }
   
-  // Value noise for stone texture
+  vec3 hash3(vec2 p) {
+    vec3 q = vec3(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)), dot(p, vec2(419.2, 371.9)));
+    return fract(sin(q) * 43758.5453);
+  }
+  
+  // Value noise
   float valueNoise(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
@@ -108,87 +113,157 @@ const fragmentShader = `
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
   }
   
-  // FBM for stone texture
-  float stoneFBM(vec2 p) {
+  // FBM with ridged noise for rocky texture
+  float fbm(vec2 p) {
     float value = 0.0;
     float amplitude = 0.5;
-    float frequency = 1.0;
-    for(int i = 0; i < 5; i++) {
-      value += amplitude * valueNoise(p * frequency);
+    for(int i = 0; i < 6; i++) {
+      value += amplitude * valueNoise(p);
       amplitude *= 0.5;
-      frequency *= 2.0;
+      p *= 2.0;
     }
     return value;
   }
   
-  // Voronoi edge detection for cracks
-  float voronoiCracks(vec2 p, float jitter) {
+  // Ridged FBM for sharp rocky features
+  float ridgedFBM(vec2 p) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    for(int i = 0; i < 5; i++) {
+      float n = valueNoise(p);
+      n = 1.0 - abs(n * 2.0 - 1.0); // Ridge
+      n = n * n;
+      value += amplitude * n;
+      amplitude *= 0.5;
+      p *= 2.0;
+    }
+    return value;
+  }
+  
+  // Voronoi with variable width cracks
+  vec3 voronoiCracks(vec2 p) {
     vec2 n = floor(p);
     vec2 f = fract(p);
     
-    float md = 8.0;   // min distance to edge
-    float md2 = 8.0;  // second min distance
+    float md = 8.0;
+    float md2 = 8.0;
+    vec2 mg;
     
     for(int j = -1; j <= 1; j++) {
       for(int i = -1; i <= 1; i++) {
         vec2 g = vec2(float(i), float(j));
-        vec2 o = hash2(n + g) * jitter;
+        vec2 o = hash2(n + g);
+        o = 0.5 + 0.4 * sin(6.2831 * o); // Slight jitter
         vec2 r = g + o - f;
         float d = dot(r, r);
         
         if(d < md) {
           md2 = md;
           md = d;
+          mg = g;
         } else if(d < md2) {
           md2 = d;
         }
       }
     }
     
-    // Edge = difference between closest and second closest
-    return sqrt(md2) - sqrt(md);
+    // Return: edge distance, cell id noise, cell distance
+    float edge = sqrt(md2) - sqrt(md);
+    float cellId = hash(n + mg);
+    return vec3(edge, cellId, sqrt(md));
   }
   
-  // Multi-scale crack pattern
-  float getCracks(vec2 uv) {
-    // Large primary cracks
-    float crack1 = voronoiCracks(uv * 4.0, 0.9);
-    crack1 = smoothstep(0.0, 0.06, crack1);
+  // Multi-scale crack system
+  float getCrackIntensity(vec2 uv, out float crackWidth) {
+    // Primary large cracks
+    vec3 v1 = voronoiCracks(uv * 3.5);
+    float edge1 = v1.x;
+    float width1 = 0.04 + v1.y * 0.03; // Variable width
+    float crack1 = 1.0 - smoothstep(0.0, width1, edge1);
     
-    // Medium secondary cracks
-    float crack2 = voronoiCracks(uv * 8.0 + 50.0, 0.85);
-    crack2 = smoothstep(0.0, 0.04, crack2);
+    // Secondary medium cracks
+    vec3 v2 = voronoiCracks(uv * 7.0 + 50.0);
+    float edge2 = v2.x;
+    float width2 = 0.025 + v2.y * 0.02;
+    float crack2 = 1.0 - smoothstep(0.0, width2, edge2);
+    crack2 *= 0.7; // Less intense
     
-    // Fine tertiary cracks
-    float crack3 = voronoiCracks(uv * 16.0 + 100.0, 0.8);
-    crack3 = smoothstep(0.0, 0.03, crack3);
+    // Tertiary fine cracks
+    vec3 v3 = voronoiCracks(uv * 14.0 + 100.0);
+    float edge3 = v3.x;
+    float width3 = 0.015 + v3.y * 0.01;
+    float crack3 = 1.0 - smoothstep(0.0, width3, edge3);
+    crack3 *= 0.4;
     
-    // Combine: primary always visible, secondary/tertiary fade in hierarchy
-    float cracks = crack1;
-    cracks = min(cracks, crack2 * 0.7 + 0.3);
-    cracks = min(cracks, crack3 * 0.4 + 0.6);
+    // Combine with hierarchy
+    float cracks = max(crack1, max(crack2, crack3));
+    crackWidth = crack1 > crack2 && crack1 > crack3 ? width1 : 
+                 crack2 > crack3 ? width2 : width3;
     
     return cracks;
   }
   
-  // Sharp crack lines for lava
-  float getCrackLines(vec2 uv) {
-    // Primary crack lines - sharp
-    float line1 = voronoiCracks(uv * 4.0, 0.9);
-    line1 = 1.0 - smoothstep(0.0, 0.025, line1);
-    line1 = pow(line1, 1.5);
+  // Stone surface with displacement look
+  vec3 getStoneColor(vec2 uv, float mouseInfluence) {
+    // Multiple noise layers for realistic stone
+    float n1 = fbm(uv * 8.0);
+    float n2 = fbm(uv * 16.0 + 100.0);
+    float n3 = ridgedFBM(uv * 6.0 + 50.0);
+    float n4 = valueNoise(uv * 32.0); // Fine grain
     
-    // Secondary crack lines - thinner
-    float line2 = voronoiCracks(uv * 8.0 + 50.0, 0.85);
-    line2 = 1.0 - smoothstep(0.0, 0.015, line2);
-    line2 = pow(line2, 2.0) * 0.7;
+    // Combine for layered rock texture
+    float surface = n1 * 0.4 + n2 * 0.3 + n3 * 0.2 + n4 * 0.1;
     
-    // Tertiary - finest
-    float line3 = voronoiCracks(uv * 16.0 + 100.0, 0.8);
-    line3 = 1.0 - smoothstep(0.0, 0.01, line3);
-    line3 = pow(line3, 2.5) * 0.4;
+    // Base colors - very dark basalt
+    vec3 darkest = vec3(0.012, 0.012, 0.015);
+    vec3 dark = vec3(0.04, 0.038, 0.042);
+    vec3 mid = vec3(0.08, 0.075, 0.08);
+    vec3 highlight = vec3(0.12, 0.11, 0.115);
     
-    return max(max(line1, line2), line3);
+    // Build color based on surface noise
+    vec3 color = mix(darkest, dark, smoothstep(0.3, 0.5, surface));
+    color = mix(color, mid, smoothstep(0.5, 0.7, surface));
+    color = mix(color, highlight, smoothstep(0.7, 0.9, surface) * 0.5);
+    
+    // Add ridged highlights for that rocky feel
+    float ridges = ridgedFBM(uv * 10.0);
+    color += vec3(0.02) * ridges * ridges;
+    
+    // Subtle surface variation
+    color *= 0.9 + n4 * 0.2;
+    
+    // Near mouse, add subtle warm reflection
+    color += vec3(0.02, 0.01, 0.005) * mouseInfluence * surface;
+    
+    return color;
+  }
+  
+  // Lava color with temperature gradient
+  vec3 getLavaColor(float intensity, float distFromEdge, float mouseInfluence) {
+    // Temperature-based colors
+    vec3 coolEdge = vec3(0.25, 0.02, 0.0);     // Dark red at edges
+    vec3 warm = vec3(0.6, 0.1, 0.0);           // Red-orange
+    vec3 hot = vec3(1.0, 0.4, 0.0);            // Orange
+    vec3 veryHot = vec3(1.0, 0.7, 0.15);       // Yellow-orange
+    vec3 white = vec3(1.0, 0.95, 0.6);         // White-hot core
+    
+    // Gradient from edge to center
+    float t = pow(distFromEdge, 0.7);
+    
+    vec3 color = mix(coolEdge, warm, smoothstep(0.0, 0.3, t));
+    color = mix(color, hot, smoothstep(0.2, 0.5, t));
+    color = mix(color, veryHot, smoothstep(0.4, 0.75, t));
+    color = mix(color, white, smoothstep(0.7, 1.0, t) * 0.6);
+    
+    // Boost near mouse
+    float boost = mouseInfluence * 0.4;
+    color = mix(color, white, boost * t * t);
+    
+    // Pulsing glow
+    float pulse = sin(uTime * 1.5) * 0.1 + 0.9;
+    color *= pulse;
+    
+    return color * intensity;
   }
   
   void main() {
@@ -197,97 +272,67 @@ const fragmentShader = `
     vec2 uvAspect = uv * aspect;
     vec2 mouseAspect = uMouse * aspect;
     
-    // Mouse influence with smooth falloff
+    // Mouse influence
     float dist = distance(uvAspect, mouseAspect);
-    float mouseInfluence = smoothstep(0.6, 0.0, dist);
-    float mouseInfluenceWide = smoothstep(0.9, 0.0, dist);
+    float mouseInfluence = smoothstep(0.7, 0.0, dist);
+    float mouseWide = smoothstep(1.0, 0.0, dist);
     
-    // === STONE TEXTURE ===
-    // Multiple layers of noise for realistic basalt look
-    float stoneBase = stoneFBM(uv * 12.0);
-    float stoneDetail = stoneFBM(uv * 24.0 + 100.0);
-    float stoneFine = stoneFBM(uv * 48.0 + 200.0);
+    // Get crack pattern
+    float crackWidth;
+    float cracks = getCrackIntensity(uv, crackWidth);
     
-    // Combine for varied stone surface
-    float stoneTexture = stoneBase * 0.5 + stoneDetail * 0.35 + stoneFine * 0.15;
+    // Calculate distance from crack edge for gradient
+    vec3 v1 = voronoiCracks(uv * 3.5);
+    float primaryEdge = v1.x;
+    float normalizedDist = 1.0 - smoothstep(0.0, 0.05, primaryEdge);
+    normalizedDist = pow(normalizedDist, 0.8);
     
-    // === CRACK PATTERN ===
-    float cracks = getCracks(uv);
-    float crackLines = getCrackLines(uv);
+    // Stone surface
+    vec3 stone = getStoneColor(uv, mouseInfluence);
     
-    // === COLORS ===
-    // Dark basalt/obsidian stone colors
-    vec3 stoneBlack = vec3(0.02, 0.02, 0.02);
-    vec3 stoneDark = vec3(0.06, 0.055, 0.05);
-    vec3 stoneMid = vec3(0.1, 0.09, 0.085);
+    // Darken stone near cracks (depth effect)
+    float crackShadow = smoothstep(0.15, 0.0, primaryEdge);
+    stone *= 1.0 - crackShadow * 0.4;
     
-    // Lava colors - bright in center, dark red at edges
-    vec3 lavaCore = vec3(1.0, 0.95, 0.4);      // Yellow-white hot
-    vec3 lavaBright = vec3(1.0, 0.6, 0.1);     // Bright orange
-    vec3 lavaMid = vec3(0.9, 0.25, 0.0);       // Orange-red
-    vec3 lavaDark = vec3(0.4, 0.05, 0.0);      // Dark red glow
+    // === LAVA ===
+    // Lava visibility based on mouse
+    float lavaVisibility = mix(0.25, 1.0, mouseWide);
     
-    // Build stone surface with texture
-    float stoneMix = stoneTexture;
-    vec3 stone = mix(stoneBlack, stoneDark, stoneMix);
-    stone = mix(stone, stoneMid, pow(stoneTexture, 2.0) * 0.5);
+    // Lava intensity in cracks
+    float lavaIntensity = cracks * lavaVisibility;
     
-    // Add subtle surface relief based on crack proximity
-    float crackDepth = 1.0 - cracks;
-    stone *= (0.85 + cracks * 0.15); // Darken near cracks
-    
-    // Add fine surface detail
-    stone += vec3(stoneFine * 0.03);
-    
-    // === LAVA IN CRACKS ===
-    // Lava only appears in crack lines
-    float lavaAmount = crackLines;
-    
-    // Mouse reveals/intensifies the lava
-    float lavaVisibility = mix(0.3, 1.0, mouseInfluenceWide);
-    lavaAmount *= lavaVisibility;
-    
-    // Subtle pulsing animation
-    float pulse = sin(uTime * 0.8) * 0.15 + 0.85;
-    float pulse2 = sin(uTime * 1.2 + uv.x * 10.0) * 0.1 + 0.9;
-    lavaAmount *= pulse * pulse2;
-    
-    // Color gradient within crack: bright center, dark edges
-    float crackCenter = pow(crackLines, 0.5); // Brighter falloff for center
-    
-    vec3 lavaColor = mix(lavaDark, lavaMid, crackCenter);
-    lavaColor = mix(lavaColor, lavaBright, pow(crackCenter, 1.5));
-    lavaColor = mix(lavaColor, lavaCore, pow(crackCenter, 3.0));
-    
-    // Increase brightness/saturation near mouse
-    lavaColor *= (0.7 + mouseInfluence * 0.5);
-    lavaColor = mix(lavaColor, lavaCore, mouseInfluence * pow(crackCenter, 2.0) * 0.3);
+    // Get lava color with gradient
+    vec3 lava = getLavaColor(lavaIntensity, normalizedDist * cracks, mouseInfluence);
     
     // === COMBINE ===
     vec3 finalColor = stone;
     
-    // Add lava in cracks
-    finalColor = mix(finalColor, lavaColor, lavaAmount);
+    // Add lava
+    finalColor = mix(finalColor, lava, cracks * lavaVisibility);
     
-    // Add glow around cracks near mouse (subtle bloom effect)
-    float glowWidth = voronoiCracks(uv * 4.0, 0.9);
-    float glow = 1.0 - smoothstep(0.0, 0.15, glowWidth);
-    glow = pow(glow, 3.0) * mouseInfluence * 0.4;
-    finalColor += lavaDark * glow;
+    // Add bloom/glow around bright cracks
+    float glowAmount = cracks * normalizedDist * mouseInfluence;
+    vec3 glowColor = vec3(0.4, 0.1, 0.0);
     
-    // Add secondary glow for medium cracks
-    float glowWidth2 = voronoiCracks(uv * 8.0 + 50.0, 0.85);
-    float glow2 = 1.0 - smoothstep(0.0, 0.1, glowWidth2);
-    glow2 = pow(glow2, 3.0) * mouseInfluence * 0.2;
-    finalColor += lavaDark * glow2;
+    // Glow extends beyond crack edges
+    float glowExtent = smoothstep(0.2, 0.0, primaryEdge) * mouseInfluence * 0.3;
+    finalColor += glowColor * glowExtent;
     
-    // === POST PROCESSING ===
-    // Subtle vignette
-    float vignette = 1.0 - smoothstep(0.5, 1.5, length(uv - 0.5) * 1.4);
-    finalColor *= vignette * 0.3 + 0.7;
+    // Secondary crack glow
+    vec3 v2 = voronoiCracks(uv * 7.0 + 50.0);
+    float glow2 = smoothstep(0.12, 0.0, v2.x) * mouseInfluence * 0.15;
+    finalColor += glowColor * glow2;
     
-    // Slight contrast boost
-    finalColor = pow(finalColor, vec3(1.1));
+    // === POST ===
+    // Vignette
+    float vignette = 1.0 - smoothstep(0.4, 1.5, length(uv - 0.5) * 1.3);
+    finalColor *= vignette * 0.25 + 0.75;
+    
+    // Slight contrast
+    finalColor = pow(finalColor, vec3(1.05));
+    
+    // Clamp
+    finalColor = clamp(finalColor, 0.0, 1.0);
     
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -324,17 +369,14 @@ function init() {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
   scene.add(mesh);
   
-  // Smooth mouse tracking
   const targetMouse = new THREE.Vector2(0.5, 0.5);
   const currentMouse = new THREE.Vector2(0.5, 0.5);
   
-  // Mouse move handler
   document.addEventListener('mousemove', (e) => {
     targetMouse.x = e.clientX / window.innerWidth;
     targetMouse.y = 1.0 - (e.clientY / window.innerHeight);
   });
   
-  // Touch support
   document.addEventListener('touchmove', (e) => {
     if (e.touches.length > 0) {
       targetMouse.x = e.touches[0].clientX / window.innerWidth;
@@ -342,19 +384,16 @@ function init() {
     }
   });
   
-  // Resize handler
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     uniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
   });
   
-  // Animation loop
   function animate() {
     requestAnimationFrame(animate);
     
     uniforms.uTime.value += 0.016;
     
-    // Smooth mouse interpolation
     currentMouse.x += (targetMouse.x - currentMouse.x) * 0.08;
     currentMouse.y += (targetMouse.y - currentMouse.y) * 0.08;
     uniforms.uMouse.value.copy(currentMouse);
@@ -365,7 +404,6 @@ function init() {
   animate();
 }
 
-// Initialize when DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {
